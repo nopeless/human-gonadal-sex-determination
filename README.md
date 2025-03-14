@@ -2,6 +2,8 @@
 
 Well, I was talking to one of the researchers and they said it took 2 hours to run a certain section of the program and I said I can do it under a minute so heres that
 
+Also somehow I couldn't get the exact original results but the ratio is close enough so I guess its fine
+
 # How to run
 
 Prepare precomputed binary file
