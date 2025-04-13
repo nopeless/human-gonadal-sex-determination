@@ -11,8 +11,6 @@
 #define THREAD_COUNT 16
 
 // #define THREAD_COUNT 1
-#define SKIP_SYNCHRONOUS
-// #define ONLY_SYNCHRONOUS
 // #define DEBUG_INDIVIDUAL_STATES
 // #define DEBUG_INDIVIDUAL_STATES_ALL
 
@@ -21,10 +19,16 @@ struct WorkerArg
   int id;
   int start;
   int end;
-  int fd;
-  int attractors[STATE_COUNT];
+  int (*data)[GENE_COUNT];
   int cyclic_counts;
+  // Helps with big array alignment
+  __attribute__((aligned(64))) int attractors[STATE_COUNT];
+  // Add padding to avoid cache sharing between numa nodes
+  __attribute__((aligned(64))) int _padding[8];
 };
+
+// Global lookup table
+int gene_lookup_table[STATE_COUNT][GENE_COUNT];
 
 void helper_print_line(int *line)
 {
@@ -46,18 +50,23 @@ void helper_print_state(int state)
 void helper_print_results(struct WorkerArg *arg)
 {
   int total = 0;
+
+  for (int i = 0; i < STATE_COUNT; i++)
+  {
+    total += arg->attractors[i];
+  }
+
   for (int i = 0; i < STATE_COUNT; i++)
   {
     if (arg->attractors[i] > 0)
     {
-      total += arg->attractors[i];
-      printf("  Attractor %3d: %9d\n", i, arg->attractors[i]);
+      printf("  Attractor %3d: %9d (%.2f%%)\n", i, arg->attractors[i], ((float)arg->attractors[i] * 100 / (float)total));
       printf("    State: ");
       helper_print_state(i);
       printf("\n");
     }
   }
-  printf("Cyclic: %d\n", arg->cyclic_counts);
+  printf("Cyclic: %d (%.2f%%)\n", arg->cyclic_counts, ((float)arg->cyclic_counts * 100 / (float)total));
   printf("Total: %d\n", total + arg->cyclic_counts);
 }
 
@@ -91,27 +100,39 @@ static inline int gene_update_value(int id, int state)
   switch (id)
   {
   case 0:
-    return ((state >> 8 & 1) | (state >> 1 & 1) | (state >> 3 & 1));
+    return (state >> 8 & 1) | (state >> 1 & 1) | (state >> 3 & 1);
   case 1:
-    return (((state >> 0 & 1)) | (state >> 0 & 1)) & !((state >> 2 & 1) & (state >> 8 & 1));
+    return (state >> 0 & 1) & !((state >> 2 & 1) & (state >> 8 & 1));
   case 2:
-    return (((state >> 0 & 1)) | ((state >> 8 & 1) & (state >> 9 & 1))) & !((state >> 1 & 1) & (state >> 4 & 1));
+    return ((state >> 0 & 1) | ((state >> 8 & 1) & (state >> 9 & 1))) & !((state >> 1 & 1) & (state >> 4 & 1));
   case 3:
-    return (((state >> 4 & 1) | (state >> 3 & 1))) & !((state >> 9 & 1));
+    return ((state >> 4 & 1) | (state >> 3 & 1)) & !(state >> 9 & 1);
   case 4:
-    return (((state >> 4 & 1) & (state >> 5 & 1)) | ((state >> 3 & 1) | (state >> 6 & 1)) | ((state >> 0 & 1) & (state >> 1 & 1) & (state >> 3 & 1))) & !((state >> 8 & 1) | (state >> 9 & 1) | ((state >> 8 & 1) & (state >> 9 & 1)));
+    return (((state >> 4 & 1) & (state >> 5 & 1)) | (state >> 3 & 1) | (state >> 6 & 1) | ((state >> 0 & 1) & (state >> 1 & 1) & (state >> 3 & 1))) & !((state >> 8 & 1) | (state >> 9 & 1));
   case 5:
     return (state >> 4 & 1) & !(state >> 8 & 1);
   case 6:
     return (state >> 4 & 1);
   case 7:
-    return ((state >> 3 & 1) | (state >> 4 & 1));
+    return (state >> 3 & 1) | (state >> 4 & 1);
   case 8:
-    return ((state >> 0 & 1) | ((state >> 9 & 1) | ((state >> 8 & 1) | (state >> 9 & 1)) | (state >> 2 & 1))) & !((state >> 5 & 1) | (state >> 7 & 1));
+    return ((state >> 0 & 1) | (state >> 9 & 1) | (state >> 8 & 1) | (state >> 2 & 1)) & !((state >> 5 & 1) | (state >> 7 & 1));
   case 9:
-    return ((state >> 8 & 1) | ((state >> 8 & 1) | (state >> 9 & 1))) & !((state >> 3 & 1) | ((state >> 4 & 1) & (((state >> 4 & 1) & (state >> 0 & 1) & (state >> 1 & 1)) | ((state >> 4 & 1) & (state >> 1 & 1) & (state >> 0 & 1) & ((state >> 0 & 1))))) | (state >> 7 & 1));
+    return ((state >> 8 & 1) | (state >> 9 & 1)) & !((state >> 3 & 1) | ((state >> 4 & 1) & (state >> 0 & 1) & (state >> 1 & 1)) | (state >> 7 & 1));
   }
   return 0;
+}
+
+void precompute_gene_lookup_table()
+{
+  for (int state = 0; state < STATE_COUNT; state++)
+  {
+    for (int gene = 0; gene < GENE_COUNT; gene++)
+    {
+      int value = gene_update_value(gene, state);
+      gene_lookup_table[state][gene] = value << gene;
+    }
+  }
 }
 
 void *worker(struct WorkerArg *arg)
@@ -122,18 +143,7 @@ void *worker(struct WorkerArg *arg)
 
   for (int i = arg->start; i < arg->end; i++)
   {
-
-#ifdef SKIP_SYNCHRONOUS
-    if (i == 0)
-      continue;
-#endif
-
-    int line[GENE_COUNT];
-    if (!~pread(arg->fd, line, sizeof(line), i * sizeof(line)))
-    {
-      perror("pread");
-      exit(1);
-    }
+    int *line = arg->data[i];
 
     for (int initial_state = 0; initial_state < STATE_COUNT; initial_state++)
     {
@@ -146,25 +156,34 @@ void *worker(struct WorkerArg *arg)
 
         for (int time = 0; time < GENE_COUNT; time++)
         {
-          int staging_state = state;
+          int next_state = 0;
+          // I have absolutely no idea how, but this makes code faster (30% faster)
+          int NOP = 1;
 
           for (int gene = 0; gene < GENE_COUNT; gene++)
           {
             if (line[gene] == time)
             {
-              int update_value = gene_update_value(gene, state) != 0;
-              staging_state = (staging_state & ~(1 << gene)) | (update_value << gene);
+              next_state |= gene_lookup_table[state][gene];
+
+              // next_state &= ~(1 << gene);
+              // next_state |= gene_lookup_table[state][gene];
+
+              NOP = 0;
+            }
+            else
+            {
+              next_state |= (state & (1 << gene));
             }
           }
-          state = staging_state;
-        }
 
-        // new test
-        // if (previous_states_len > 1 && previous_states[previous_states_len - 1] == state)
-        // {
-        //   arg->attractors[state]++;
-        //   break;
-        // }
+          state = next_state;
+
+          if (NOP)
+          {
+            break;
+          }
+        }
 
         for (int check_cyclic = 0; check_cyclic < previous_states_len; check_cyclic++)
         {
@@ -195,6 +214,7 @@ void *worker(struct WorkerArg *arg)
 #endif
 
 #endif
+
             goto break_loop;
           }
         }
@@ -211,17 +231,35 @@ void *worker(struct WorkerArg *arg)
 
 int main(int argc, char **argv)
 {
-  int fd = open("groups.bin", O_RDONLY, 0);
-  lseek(fd, 0, SEEK_SET);
+  int fd = open("groups.bin", O_RDONLY);
+  if (fd < 0)
+  {
+    perror("open");
+    exit(1);
+  }
 
-#ifdef ONLY_SYNCHRONOUS
-  int TOTAL_LINES = 1;
-#else
   off_t file_size = lseek(fd, 0, SEEK_END);
-  int TOTAL_LINES = file_size / (4 * GENE_COUNT);
-#endif
+
+  if (file_size < 0)
+  {
+    perror("lseek");
+    close(fd);
+    exit(1);
+  }
+
+  int TOTAL_LINES = file_size / (sizeof(int) * GENE_COUNT);
 
   printf("Total lines: %d\n", TOTAL_LINES);
+
+  int(*data)[GENE_COUNT] = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (data == MAP_FAILED)
+  {
+    perror("mmap");
+    close(fd);
+    exit(1);
+  }
+
+  precompute_gene_lookup_table();
 
   struct WorkerArg args[THREAD_COUNT];
   pthread_t threads[THREAD_COUNT];
@@ -232,7 +270,7 @@ int main(int argc, char **argv)
     args[i].id = i;
     args[i].start = i * chunk_size;
     args[i].end = (i == THREAD_COUNT - 1) ? TOTAL_LINES : (i + 1) * chunk_size;
-    args[i].fd = fd;
+    args[i].data = data;
     memset(args[i].attractors, 0, sizeof(args[i].attractors));
     args[i].cyclic_counts = 0;
     pthread_create(&threads[i], NULL, (void *(*)(void *))worker, &args[i]);
@@ -250,6 +288,7 @@ int main(int argc, char **argv)
 
   printf("done\n");
 
+  munmap(data, file_size);
   close(fd);
   return 0;
 }

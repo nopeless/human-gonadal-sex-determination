@@ -12,12 +12,14 @@ gene_table = dict(zip(genes, itertools.count()))
 
 # Use this to index genes
 def EXPR_REPLACER(n: int):
-    return f"(state >> {n} & 1)"
+    # return f"(state >> {n} & 1)"
+    return f"final_bin[,{n+1},,j] == 1"
 
 
 # Use this to generate functions
 def LINE_REPLACER(case, expr: str):
-    return f"case {case}:\nreturn {expr};"
+    # return f"case {case}:\nreturn {expr};"
+    return f"condition{case+1}.2 = {expr}"
 
 
 import sys
