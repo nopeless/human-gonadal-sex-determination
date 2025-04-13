@@ -10,6 +10,12 @@
 #define STATE_COUNT (1 << GENE_COUNT)
 #define THREAD_COUNT 16
 
+// #define THREAD_COUNT 1
+#define SKIP_SYNCHRONOUS
+// #define ONLY_SYNCHRONOUS
+// #define DEBUG_INDIVIDUAL_STATES
+// #define DEBUG_INDIVIDUAL_STATES_ALL
+
 struct WorkerArg
 {
   int id;
@@ -29,15 +35,12 @@ void helper_print_line(int *line)
   }
   printf("\n");
 }
-
 void helper_print_state(int state)
 {
-  printf("    State: ");
   for (int i = 0; i < GENE_COUNT; i++)
   {
     printf("%d", (state >> i) & 1);
   }
-  printf("\n");
 }
 
 void helper_print_results(struct WorkerArg *arg)
@@ -49,11 +52,23 @@ void helper_print_results(struct WorkerArg *arg)
     {
       total += arg->attractors[i];
       printf("  Attractor %3d: %9d\n", i, arg->attractors[i]);
+      printf("    State: ");
       helper_print_state(i);
+      printf("\n");
     }
   }
   printf("Cyclic: %d\n", arg->cyclic_counts);
   printf("Total: %d\n", total + arg->cyclic_counts);
+}
+
+void helper_print_states(int *states, int len)
+{
+  for (int i = 0; i < len; i++)
+  {
+    printf("%6d: ", i);
+    helper_print_state(states[i]);
+    printf("\n");
+  }
 }
 
 void aggregate_args(struct WorkerArg *args, int num_threads, struct WorkerArg *result)
@@ -71,30 +86,30 @@ void aggregate_args(struct WorkerArg *args, int num_threads, struct WorkerArg *r
   }
 }
 
-static inline int gene_update_value(int id, short state)
+static inline int gene_update_value(int id, int state)
 {
   switch (id)
   {
   case 0:
-    return (state >> 8 & 1) | (state >> 1 & 1) | (state >> 3 & 1);
+    return ((state >> 8 & 1) | (state >> 1 & 1) | (state >> 3 & 1));
   case 1:
-    return (state >> 0 & 1) & !((state >> 2 & 1) & (state >> 8 & 1));
+    return (((state >> 0 & 1)) | (state >> 0 & 1)) & !((state >> 2 & 1) & (state >> 8 & 1));
   case 2:
-    return ((state >> 0 & 1) | ((state >> 8 & 1) & (state >> 9 & 1))) & !((state >> 1 & 1) & (state >> 4 & 1));
+    return (((state >> 0 & 1)) | ((state >> 8 & 1) & (state >> 9 & 1))) & !((state >> 1 & 1) & (state >> 4 & 1));
   case 3:
-    return ((state >> 4 & 1) | (state >> 3 & 1)) & !(state >> 9 & 1);
+    return (((state >> 4 & 1) | (state >> 3 & 1))) & !((state >> 9 & 1));
   case 4:
-    return (((state >> 4 & 1) & (state >> 5 & 1)) | (state >> 3 & 1) | (state >> 6 & 1) | ((state >> 0 & 1) & (state >> 1 & 1) & (state >> 3 & 1))) & !((state >> 8 & 1) | (state >> 9 & 1));
+    return (((state >> 4 & 1) & (state >> 5 & 1)) | ((state >> 3 & 1) | (state >> 6 & 1)) | ((state >> 0 & 1) & (state >> 1 & 1) & (state >> 3 & 1))) & !((state >> 8 & 1) | (state >> 9 & 1) | ((state >> 8 & 1) & (state >> 9 & 1)));
   case 5:
     return (state >> 4 & 1) & !(state >> 8 & 1);
   case 6:
     return (state >> 4 & 1);
   case 7:
-    return (state >> 3 & 1) | (state >> 4 & 1);
+    return ((state >> 3 & 1) | (state >> 4 & 1));
   case 8:
-    return ((state >> 0 & 1) | (state >> 9 & 1) | (state >> 8 & 1) | (state >> 2 & 1)) & !((state >> 5 & 1) | (state >> 7 & 1));
+    return ((state >> 0 & 1) | ((state >> 9 & 1) | ((state >> 8 & 1) | (state >> 9 & 1)) | (state >> 2 & 1))) & !((state >> 5 & 1) | (state >> 7 & 1));
   case 9:
-    return ((state >> 8 & 1) | (state >> 9 & 1)) & !((state >> 3 & 1) | ((state >> 4 & 1) & (state >> 0 & 1) & (state >> 1 & 1)) | (state >> 7 & 1));
+    return ((state >> 8 & 1) | ((state >> 8 & 1) | (state >> 9 & 1))) & !((state >> 3 & 1) | ((state >> 4 & 1) & (((state >> 4 & 1) & (state >> 0 & 1) & (state >> 1 & 1)) | ((state >> 4 & 1) & (state >> 1 & 1) & (state >> 0 & 1) & ((state >> 0 & 1))))) | (state >> 7 & 1));
   }
   return 0;
 }
@@ -107,6 +122,12 @@ void *worker(struct WorkerArg *arg)
 
   for (int i = arg->start; i < arg->end; i++)
   {
+
+#ifdef SKIP_SYNCHRONOUS
+    if (i == 0)
+      continue;
+#endif
+
     int line[GENE_COUNT];
     if (!~pread(arg->fd, line, sizeof(line), i * sizeof(line)))
     {
@@ -131,7 +152,7 @@ void *worker(struct WorkerArg *arg)
           {
             if (line[gene] == time)
             {
-              int update_value = gene_update_value(gene, staging_state) != 0;
+              int update_value = gene_update_value(gene, state) != 0;
               staging_state = (staging_state & ~(1 << gene)) | (update_value << gene);
             }
           }
@@ -153,10 +174,32 @@ void *worker(struct WorkerArg *arg)
               arg->attractors[state]++;
             else
               arg->cyclic_counts++;
+
+#ifdef DEBUG_INDIVIDUAL_STATES
+            printf("%5d | ", initial_state);
+            helper_print_state(initial_state);
+            printf(" -> ");
+            helper_print_state(state);
+            printf(" [%5d] *%d", state, check_cyclic);
+
+            if (check_cyclic + 1 < previous_states_len)
+            {
+              printf(" (cyclic %5d)", previous_states_len - check_cyclic);
+            }
+
+#ifdef DEBUG_INDIVIDUAL_STATES_ALL
+            printf("\n");
+            helper_print_states(previous_states, previous_states_len);
+#else
+            printf("\n");
+#endif
+
+#endif
             goto break_loop;
           }
         }
       }
+
     break_loop:;
     }
   }
@@ -169,9 +212,15 @@ void *worker(struct WorkerArg *arg)
 int main(int argc, char **argv)
 {
   int fd = open("groups.bin", O_RDONLY, 0);
-  off_t file_size = lseek(fd, 0, SEEK_END);
   lseek(fd, 0, SEEK_SET);
+
+#ifdef ONLY_SYNCHRONOUS
+  int TOTAL_LINES = 1;
+#else
+  off_t file_size = lseek(fd, 0, SEEK_END);
   int TOTAL_LINES = file_size / (4 * GENE_COUNT);
+#endif
+
   printf("Total lines: %d\n", TOTAL_LINES);
 
   struct WorkerArg args[THREAD_COUNT];
