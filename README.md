@@ -2,7 +2,7 @@
 
 ## Incident
 
-After a casual conversation with Erika Vivanco about her work related to the SRY gene she had introduced me to her paper *Dynamical Robustness of a Boolean Model for Human Gonadal Sex Determination (Vivanco, 2024)*. She had explained that the R code used for the production of results in the paper took her 2 hours to run through the required dataset. This conversation sparked my curiosity and I have made a bet with her that I could write a more efficient implementation of the code in C and cut the required time to less than a minute. Without much experience in Computational Systems Biology, I have decided to take this as an opportunity to learn more about the field and explore gene expressions and the interplay with computer modeling systems, also hoping some validation from a researcher in the field as well.
+After a casual conversation with Erika Vivanco about her work related to the SRY gene she had introduced me to her paper *Dynamical Robustness of a Boolean Model for Human Gonadal Sex Determination (Vivanco 2024)*. She had explained that the R code used for the production of results in the paper took her 2 hours to run through the required dataset. This conversation sparked my curiosity and I have made a bet with her that I could write a more efficient implementation of the code in C and cut the required time to less than a minute. Without much experience in Computational Systems Biology, I have decided to take this as an opportunity to learn more about the field and explore gene expressions and the interplay with computer modeling systems, also hoping some validation from a researcher in the field as well.
 
 ## Technical
 
